@@ -1,0 +1,16 @@
+diff --git a/src/InstanceAgent/Api/InstanceEndpoints.cs b/src/InstanceAgent/Api/InstanceEndpoints.cs
+index eb291c1..84fa86f 100644
+--- a/src/InstanceAgent/Api/InstanceEndpoints.cs
++++ b/src/InstanceAgent/Api/InstanceEndpoints.cs
+@@ -22,7 +22,10 @@ public static class InstanceEndpoints
+         group.MapPost("/{id}/stop", (string id, HttpContext context, IInstanceLifecycleService service, CancellationToken cancellationToken) => ExecuteLifecycleAsync(id, InstanceLifecycleOperation.Stop, context, service, cancellationToken));
+         group.MapPost("/{id}/restart", (string id, HttpContext context, IInstanceLifecycleService service, CancellationToken cancellationToken) => ExecuteLifecycleAsync(id, InstanceLifecycleOperation.Restart, context, service, cancellationToken));
+         group.MapPost("/{id}/reset", ResetAsync);
+-        group.MapPost("/{id}/restore", RestoreAsync);
++        // Bearer-token-authenticated machine API: the IFormFile parameter makes ASP.NET Core attach
++        // antiforgery (CSRF) metadata by convention, which has no meaning here and throws without
++        // app.UseAntiforgery() wired up (which this API intentionally doesn't have).
++        group.MapPost("/{id}/restore", RestoreAsync).DisableAntiforgery();
+         return endpoints;
+     }
+ 

@@ -1,0 +1,13 @@
+diff --git a/src/InstanceAgent/Application/Instances/SqliteInstanceProvisioningService.cs b/src/InstanceAgent/Application/Instances/SqliteInstanceProvisioningService.cs
+index a6bccd5..2f6a2ad 100644
+--- a/src/InstanceAgent/Application/Instances/SqliteInstanceProvisioningService.cs
++++ b/src/InstanceAgent/Application/Instances/SqliteInstanceProvisioningService.cs
+@@ -156,7 +156,7 @@ public sealed partial class SqliteInstanceProvisioningService(
+             var now = DateTimeOffset.UtcNow;
+             var persisted = await instanceRepository.CreateAsync(new ManagedInstance(
+                 instanceId, command.Name!, domain.NormalizedDomain!, containerId, containerName, hostPort,
+-                "sqlite", null, null, null, null, null, "running", instancePath, options.Value.LicenseServerImage,
++                "sqlite", null, null, null, null, null, "running", dataPath, options.Value.LicenseServerImage,
+                 null, 0, 0, now, now), cancellationToken);
+             if (persisted != CreateInstanceResult.Created)
+             {

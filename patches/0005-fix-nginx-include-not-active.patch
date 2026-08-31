@@ -1,0 +1,9 @@
+diff --git a/deploy/instance-agent/nginx/mmprotect-include.conf b/deploy/instance-agent/nginx/mmprotect-include.conf
+index 7eda89e..21b9995 100644
+--- a/deploy/instance-agent/nginx/mmprotect-include.conf
++++ b/deploy/instance-agent/nginx/mmprotect-include.conf
+@@ -1,3 +1,2 @@
+-# Include this file from nginx.conf/http context:
+-# include /etc/nginx/mmprotect.d/*.conf;
+ # Managed instance vHosts are written by the MMProtect Instanz-Agent.
++include /etc/nginx/mmprotect.d/*.conf;

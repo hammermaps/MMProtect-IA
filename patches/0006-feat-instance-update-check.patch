@@ -1,0 +1,128 @@
+diff --git a/docs/instance-agent.md b/docs/instance-agent.md
+index fdfcedd..56abd52 100644
+--- a/docs/instance-agent.md
++++ b/docs/instance-agent.md
+@@ -45,6 +45,10 @@ SQLite wird über die SQLite-Backup-API gesichert. ZIPs enthalten ein versionier
+ 
+ `RestoreMaxArchiveBytes` (standardmäßig 1 GiB) begrenzt den Upload; `RestoreMaxExtractedBytes` (standardmäßig 5 GiB) begrenzt die entpackte Nutzlast. Beide Werte gehören in den Abschnitt `InstanceAgent` der Konfiguration.
+ 
++## Updates
++
++`GET /api/v1/instances/{id}/updates` und `POST /api/v1/instances/{id}/updates/check` vergleichen ausschließlich das konkret konfigurierte LicenseServer-Image und die lokal mitgelieferte nginx-Template-Version. Sie ziehen keine Images nach und lösen keine Änderung aus. Die anwendenden Update-Endpunkte sind als API-Vertrag vorhanden, liefern bis zur transaktionalen Container-Neuerstellung jedoch `INSTANCE_UPDATE_NOT_IMPLEMENTED`.
++
+ ## Troubleshooting
+ 
+ Prüfe zuerst `/api/v1/preflight/docker` und `/api/v1/preflight/nginx`. Bei MySQL zusätzlich `POST /api/v1/preflight/mysql`. nginx wird nur nach erfolgreichem `nginx -t` neu geladen.
+diff --git a/src/InstanceAgent/Api/InstanceUpdateEndpoints.cs b/src/InstanceAgent/Api/InstanceUpdateEndpoints.cs
+new file mode 100644
+index 0000000..193763b
+--- /dev/null
++++ b/src/InstanceAgent/Api/InstanceUpdateEndpoints.cs
+@@ -0,0 +1,32 @@
++using MmProtect.InstanceAgent.Application.Instances;
++
++namespace MmProtect.InstanceAgent.Api;
++
++public static class InstanceUpdateEndpoints
++{
++    public static IEndpointRouteBuilder MapInstanceUpdateEndpoints(this IEndpointRouteBuilder endpoints)
++    {
++        var group = endpoints.MapGroup("/api/v1/instances/{id}/updates");
++        group.MapGet("", GetAsync);
++        group.MapPost("/check", GetAsync);
++        group.MapPost("/license-server", NotImplemented);
++        group.MapPost("/nginx", NotImplemented);
++        group.MapPost("/all", NotImplemented);
++        return endpoints;
++    }
++
++    private static async Task<IResult> GetAsync(string id, HttpContext context, IInstanceUpdateService updates, CancellationToken cancellationToken)
++    {
++        var result = await updates.CheckAsync(id, cancellationToken);
++        return result.Succeeded
++            ? Results.Ok(new
++            {
++                licenseServer = new { currentImage = result.CurrentImage, availableImage = result.AvailableImage, updateAvailable = result.LicenseServerUpdateAvailable },
++                nginx = new { installedTemplateVersion = result.InstalledNginxTemplateVersion, availableTemplateVersion = result.AvailableNginxTemplateVersion, updateAvailable = result.NginxUpdateAvailable }
++            })
++            : AgentProblem.Create(context, 404, result.ErrorCode!, "The requested instance does not exist.");
++    }
++
++    private static IResult NotImplemented(HttpContext context) =>
++        AgentProblem.Create(context, 501, "INSTANCE_UPDATE_NOT_IMPLEMENTED", "Update application is not implemented yet; use the check endpoint before planning maintenance.");
++}
+diff --git a/src/InstanceAgent/Application/Instances/InstanceUpdateService.cs b/src/InstanceAgent/Application/Instances/InstanceUpdateService.cs
+new file mode 100644
+index 0000000..7517971
+--- /dev/null
++++ b/src/InstanceAgent/Application/Instances/InstanceUpdateService.cs
+@@ -0,0 +1,36 @@
++using Microsoft.Extensions.Options;
++using MmProtect.InstanceAgent.Options;
++
++namespace MmProtect.InstanceAgent.Application.Instances;
++
++public interface IInstanceUpdateService
++{
++    Task<InstanceUpdateCheckResult> CheckAsync(string instanceId, CancellationToken cancellationToken);
++}
++
++public sealed record InstanceUpdateCheckResult(
++    bool Succeeded,
++    string? ErrorCode,
++    string? CurrentImage,
++    string? AvailableImage,
++    bool LicenseServerUpdateAvailable,
++    int InstalledNginxTemplateVersion,
++    int AvailableNginxTemplateVersion,
++    bool NginxUpdateAvailable);
++
++/// <summary>Determines updates solely from locally configured, versioned artifacts. It never resolves floating tags.</summary>
++public sealed class InstanceUpdateService(IInstanceRepository instances, IOptions<AgentOptions> options) : IInstanceUpdateService
++{
++    public async Task<InstanceUpdateCheckResult> CheckAsync(string instanceId, CancellationToken cancellationToken)
++    {
++        var instance = await instances.FindAsync(instanceId, cancellationToken);
++        if (instance is null) return new(false, "INSTANCE_NOT_FOUND", null, null, false, 0, 0, false);
++
++        var configuredImage = options.Value.LicenseServerImage;
++        var imageUpdateAvailable = !string.IsNullOrWhiteSpace(configuredImage) &&
++            !string.Equals(instance.ImageReference, configuredImage, StringComparison.Ordinal);
++        var nginxUpdateAvailable = instance.InstalledTemplateVersion < options.Value.NginxTemplateVersion;
++        return new(true, null, instance.ImageReference, configuredImage, imageUpdateAvailable,
++            instance.InstalledTemplateVersion, options.Value.NginxTemplateVersion, nginxUpdateAvailable);
++    }
++}
+diff --git a/src/InstanceAgent/Application/Instances/SqliteInstanceProvisioningService.cs b/src/InstanceAgent/Application/Instances/SqliteInstanceProvisioningService.cs
+index a6bccd5..5bd41c8 100644
+--- a/src/InstanceAgent/Application/Instances/SqliteInstanceProvisioningService.cs
++++ b/src/InstanceAgent/Application/Instances/SqliteInstanceProvisioningService.cs
+@@ -157,7 +157,7 @@ public sealed partial class SqliteInstanceProvisioningService(
+             var persisted = await instanceRepository.CreateAsync(new ManagedInstance(
+                 instanceId, command.Name!, domain.NormalizedDomain!, containerId, containerName, hostPort,
+                 "sqlite", null, null, null, null, null, "running", instancePath, options.Value.LicenseServerImage,
+-                null, 0, 0, now, now), cancellationToken);
++                null, nginx.TemplateVersion, nginx.ConfigRevision, now, now), cancellationToken);
+             if (persisted != CreateInstanceResult.Created)
+             {
+                 return ProvisionInstanceResult.Failure(persisted == CreateInstanceResult.DomainAlreadyAssigned ? "DOMAIN_ALREADY_ASSIGNED" : "INSTANCE_PERSIST_FAILED");
+diff --git a/src/InstanceAgent/Program.cs b/src/InstanceAgent/Program.cs
+index ec27a87..e2c1a80 100644
+--- a/src/InstanceAgent/Program.cs
++++ b/src/InstanceAgent/Program.cs
+@@ -36,6 +36,7 @@ builder.Services.AddSingleton<IIdempotencyService, IdempotencyService>();
+ builder.Services.AddSingleton<IInstanceLifecycleService, InstanceLifecycleService>();
+ builder.Services.AddSingleton<IInstanceDeletionService, InstanceDeletionService>();
+ builder.Services.AddSingleton<IInstanceResetService, InstanceResetService>();
++builder.Services.AddSingleton<IInstanceUpdateService, InstanceUpdateService>();
+ builder.Services.AddSingleton<IProcessRunner, ProcessRunner>();
+ builder.Services.AddSingleton<INginxService, NginxService>();
+ builder.Services.AddSingleton<ITlsCertificateService, TlsCertificateService>();
+@@ -68,6 +69,7 @@ using (var scope = app.Services.CreateScope())
+ app.UseMiddleware<ApiKeyAuthenticationMiddleware>();
+ app.MapHostEndpoints();
+ app.MapInstanceEndpoints();
++app.MapInstanceUpdateEndpoints();
+ app.MapPreflightEndpoints();
+ app.MapBackupEndpoints();
+ app.MapAgentEndpoints();

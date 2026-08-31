@@ -126,7 +126,7 @@ Die detaillierten Anforderungen und die Phasenplanung stehen in [instance-agent-
 
 ## Status
 
-**Planung:** Die Architektur und Anforderungen sind dokumentiert. Die Implementierung von `src/InstanceAgent/` und `src/InstanceAgent.Tests/` ist das nächste Arbeitspaket.
+Der Instanz-Agent enthält die lokale Host-API, SQLite- und externe MySQL-Provisionierung, Docker-Lifecycle, nginx/TLS-Anbindung, SQLite-Backups und -Restore sowie Update-Erkennung. Die noch offenen Themen sind insbesondere MySQL-Backups/-Restore, transaktionale LicenseServer-/nginx-Updates und produktionsnahe Docker-/nginx-Integrationstests.
 
 ## Lizenz
 

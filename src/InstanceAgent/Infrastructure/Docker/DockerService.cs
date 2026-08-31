@@ -84,6 +84,9 @@ public sealed class DockerService : IDockerService, IDisposable
             {
                 Name = request.ContainerName,
                 Image = request.ImageReference,
+                // Bind-mounted instance files are owned by the agent's own uid (root); run the
+                // container as the same uid so it can read/write them regardless of the image's USER.
+                User = "0:0",
                 Env = request.Environment.ToList(),
                 ExposedPorts = new Dictionary<string, EmptyStruct> { ["8080/tcp"] = default },
                 HostConfig = new HostConfig
@@ -124,8 +127,37 @@ public sealed class DockerService : IDockerService, IDisposable
     public Task<DockerOperationResult> RestartAsync(string containerId, CancellationToken cancellationToken) =>
         RunAsync(containerId, "restart", () => _client.Containers.RestartContainerAsync(containerId, new ContainerRestartParameters { WaitBeforeKillSeconds = 15 }, cancellationToken), cancellationToken);
 
-    public Task<DockerOperationResult> DeleteAsync(string containerId, CancellationToken cancellationToken) =>
-        RunAsync(containerId, "delete", () => _client.Containers.RemoveContainerAsync(containerId, new ContainerRemoveParameters { Force = true }, cancellationToken), cancellationToken);
+    public async Task<DockerOperationResult> DeleteAsync(string containerId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await _client.Containers.RemoveContainerAsync(containerId, new ContainerRemoveParameters { Force = true }, cancellationToken);
+        }
+        catch (DockerContainerNotFoundException)
+        {
+            // Already gone (e.g. a previous delete attempt removed the container but failed at a later
+            // step). Deletion must be idempotent, so treat "not found" as success instead of blocking
+            // cleanup forever on retry.
+            _logger.LogInformation("Docker delete: container {ContainerId} already absent", containerId);
+            return DockerOperationResult.Success(containerId);
+        }
+        catch (TaskCanceledException)
+        {
+            return DockerOperationResult.Failure("DOCKER_TIMEOUT");
+        }
+        catch (DockerApiException)
+        {
+            return DockerOperationResult.Failure("DOCKER_DELETE_FAILED");
+        }
+        catch (Exception exception)
+        {
+            _logger.LogWarning("Docker delete failed with {ExceptionType}", exception.GetType().Name);
+            return DockerOperationResult.Failure("DOCKER_DELETE_FAILED");
+        }
+
+        _logger.LogInformation("Docker delete completed for container {ContainerId}", containerId);
+        return DockerOperationResult.Success(containerId);
+    }
 
     public void Dispose() => _client.Dispose();
 

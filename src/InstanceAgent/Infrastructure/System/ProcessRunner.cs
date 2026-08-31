@@ -29,13 +29,26 @@ public sealed class ProcessRunner(ILogger<ProcessRunner> logger) : IProcessRunne
             process.StartInfo.ArgumentList.Add(argument);
         }
 
-        process.Start();
+        try
+        {
+            process.Start();
+        }
+        catch (global::System.ComponentModel.Win32Exception)
+        {
+            logger.LogWarning("Process {FileName} could not be started", fileName);
+            return new ProcessResult(false, null, false);
+        }
+
+        var stdout = DrainAsync(process.StandardOutput);
+        var stderr = DrainAsync(process.StandardError);
         using var timeoutSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeoutSource.CancelAfter(timeout);
         try
         {
             await process.WaitForExitAsync(timeoutSource.Token);
-            logger.LogDebug("Process {FileName} exited with {ExitCode}", fileName, process.ExitCode);
+            var output = await stdout;
+            var error = await stderr;
+            logger.LogDebug("Process {FileName} exited with {ExitCode}; stdout {StdoutLength} chars, stderr {StderrLength} chars", fileName, process.ExitCode, output, error);
             return new ProcessResult(process.ExitCode == 0, process.ExitCode, false);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
@@ -45,7 +58,22 @@ public sealed class ProcessRunner(ILogger<ProcessRunner> logger) : IProcessRunne
                 process.Kill(entireProcessTree: true);
             }
 
+            await Task.WhenAll(stdout, stderr);
+
             return new ProcessResult(false, null, true);
+        }
+    }
+
+    private static async Task<int> DrainAsync(StreamReader reader)
+    {
+        const int maximumRecordedCharacters = 8192;
+        var buffer = new char[1024];
+        var recorded = 0;
+        while (true)
+        {
+            var read = await reader.ReadAsync(buffer);
+            if (read == 0) return recorded;
+            recorded = Math.Min(maximumRecordedCharacters, recorded + read);
         }
     }
 }

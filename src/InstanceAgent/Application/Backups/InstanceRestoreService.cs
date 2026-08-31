@@ -1,5 +1,6 @@
 using System.IO.Compression;
 using Microsoft.Data.Sqlite;
+using MmProtect.InstanceAgent.Application.Host;
 using MmProtect.InstanceAgent.Application.Instances;
 using MmProtect.InstanceAgent.Options;
 using MmProtect.InstanceAgent.Infrastructure.System;
@@ -20,6 +21,7 @@ public sealed class InstanceRestoreService(
     IRestoreArchiveValidator archiveValidator,
     IInstanceBackupService backups,
     IInstanceLifecycleService lifecycle,
+    IInstanceEventService events,
     IInstanceHealthProbe healthProbe,
     IOptions<AgentOptions> options,
     ILogger<InstanceRestoreService> logger) : IInstanceRestoreService
@@ -80,6 +82,7 @@ public sealed class InstanceRestoreService(
             }
 
             if (Directory.Exists(rollbackPath)) Directory.Delete(rollbackPath, recursive: true);
+            await events.RecordAsync(instanceId, "restore.completed", "Restored SQLite backup after creating a pre-restore backup.", cancellationToken);
             logger.LogInformation("SQLite restore completed for {InstanceId}; pre-restore backup {BackupId}", instanceId, preRestoreBackup.BackupId);
             return new(true, null, wasRunning ? "running" : "stopped");
         }

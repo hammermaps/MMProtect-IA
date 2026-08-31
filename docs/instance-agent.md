@@ -22,7 +22,7 @@ InstanceAgent__LetsEncryptEmail=admin@example.de
 - Containerports werden ausschließlich an `127.0.0.1` veröffentlicht.
 - Agent- und Instanzsecrets liegen nur in lokalen Dateien mit `0600`.
 - API-Keys werden ausschließlich einmalig in der Create-Antwort ausgegeben.
-- MySQL-Passwörter werden nie in der Agent-Datenbank gespeichert.
+- MySQL-Passwörter werden nie in der Agent-Datenbank gespeichert. Bei einer MySQL-Instanz wird ausschließlich die externe Datenbank verwendet; der Instanz-Agent startet keinen MySQL-Container. Vor der Provisionierung prüft er DNS, TCP, TLS, Anmeldung, Datenbankauswahl und `SELECT 1`.
 
 ## TLS
 
@@ -39,11 +39,19 @@ Vorhandene Kernbereiche:
 
 `Idempotency-Key` wird für Instanz- und Backup-Erstellung unterstützt. Backup-Downloads sind Streaming-Dateiantworten mit Range-Support.
 
+`GET /api/v1/instances/{id}/events` liefert den secret-freien Ereignisverlauf einer Instanz. Die optionale Pagination verwendet `limit` (1–100, Standard 50) und `offset`.
+
 ## Backups und Restore
 
-SQLite wird über die SQLite-Backup-API gesichert. ZIPs enthalten ein versioniertes `manifest.json`, Instanzmetadaten, Daten, Datenbanksnapshot und ausschließlich den öffentlichen Signing-Key. Ein SQLite-Restore legt zuerst ein Pre-Restore-Backup an, tauscht das Datenverzeichnis atomar und prüft nach einem Neustart den lokalen Health-Endpunkt. MySQL-Dumps und -Restore sind noch in Umsetzung.
+SQLite wird über die SQLite-Backup-API gesichert. ZIPs enthalten ein versioniertes `manifest.json`, Instanzmetadaten, Daten, Datenbanksnapshot und ausschließlich den öffentlichen Signing-Key. MySQL wird mit `mysqldump --single-transaction` inklusive Routinen, Triggern und Events gesichert. Die Zugangsdaten werden ausschließlich über eine temporäre `0600`-Defaults-Datei übergeben und anschließend gelöscht. Ein SQLite-Restore legt zuerst ein Pre-Restore-Backup an, tauscht das Datenverzeichnis atomar und prüft nach einem Neustart den lokalen Health-Endpunkt. MySQL-Restore ist noch in Umsetzung.
 
 `RestoreMaxArchiveBytes` (standardmäßig 1 GiB) begrenzt den Upload; `RestoreMaxExtractedBytes` (standardmäßig 5 GiB) begrenzt die entpackte Nutzlast. Beide Werte gehören in den Abschnitt `InstanceAgent` der Konfiguration.
+
+Beim Full Reset ist `createBackup` standardmäßig `true` und `deleteBackups` standardmäßig `false`. Bereits vorhandene Backup-Dateien werden nur bei `deleteBackups: true` nach erfolgreichem Reset entfernt.
+
+## Updates
+
+`GET /api/v1/instances/{id}/updates` und `POST /api/v1/instances/{id}/updates/check` vergleichen ausschließlich das konkret konfigurierte LicenseServer-Image und die lokal mitgelieferte nginx-Template-Version. `POST /api/v1/instances/{id}/updates/nginx` spielt die lokale Template-Version sicher ein, führt `nginx -t` und Reload aus und persistiert Version und Revision erst danach. `POST /api/v1/instances/{id}/updates/license-server` erstellt zunächst ein Backup und ersetzt anschließend nur den Container; persistente Daten, Keys und der localhost-Port bleiben erhalten. Schlagen Erstellen, Start oder Health Check fehl, wird das vorherige Image wiederhergestellt. Der kombinierte Endpunkt `/updates/all` bleibt bis zu einem gemeinsamen transaktionalen Rollback bei `INSTANCE_UPDATE_NOT_IMPLEMENTED`.
 
 ## Troubleshooting
 

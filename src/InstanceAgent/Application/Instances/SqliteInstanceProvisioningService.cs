@@ -1,6 +1,7 @@
 using System.Text.RegularExpressions;
 using System.Text.Json;
 using MmProtect.InstanceAgent.Domain.Instances;
+using MmProtect.InstanceAgent.Application.Host;
 using MmProtect.InstanceAgent.Infrastructure.Docker;
 using MmProtect.InstanceAgent.Infrastructure.LicenseServer;
 using MmProtect.InstanceAgent.Infrastructure.Nginx;
@@ -39,6 +40,7 @@ public sealed partial class SqliteInstanceProvisioningService(
     IDockerService dockerService,
     IInstanceHealthProbe healthProbe,
     IInstanceRepository instanceRepository,
+    IInstanceEventService events,
     IOptions<AgentOptions> options,
     ILogger<SqliteInstanceProvisioningService> logger) : ISqliteInstanceProvisioningService
 {
@@ -156,14 +158,15 @@ public sealed partial class SqliteInstanceProvisioningService(
             var now = DateTimeOffset.UtcNow;
             var persisted = await instanceRepository.CreateAsync(new ManagedInstance(
                 instanceId, command.Name!, domain.NormalizedDomain!, containerId, containerName, hostPort,
-                "sqlite", null, null, null, null, null, "running", instancePath, options.Value.LicenseServerImage,
-                null, 0, 0, now, now), cancellationToken);
+                "sqlite", null, null, null, null, null, "running", dataPath, options.Value.LicenseServerImage,
+                null, nginx.TemplateVersion, nginx.ConfigRevision, now, now), cancellationToken);
             if (persisted != CreateInstanceResult.Created)
             {
                 return ProvisionInstanceResult.Failure(persisted == CreateInstanceResult.DomainAlreadyAssigned ? "DOMAIN_ALREADY_ASSIGNED" : "INSTANCE_PERSIST_FAILED");
             }
 
             logger.LogInformation("Provisioned SQLite instance {InstanceId} with result {Result}", instanceId, "running");
+            await events.RecordAsync(instanceId, "provisioning.completed", "Provisioned SQLite instance.", cancellationToken);
             committed = true;
             return new ProvisionInstanceResult(true, instanceId, hostPort, credentials, null);
         }

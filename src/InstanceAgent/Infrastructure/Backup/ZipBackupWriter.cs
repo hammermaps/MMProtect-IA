@@ -12,7 +12,9 @@ public sealed record CreateZipBackupRequest(
     string DataDirectory,
     string DatabaseSnapshotPath,
     string SigningPublicKeyPath,
-    string DestinationPath);
+    string DestinationPath,
+    string DatabaseProvider = "sqlite",
+    string DatabaseArchiveFileName = "mm_license.db");
 
 public interface IZipBackupWriter
 {
@@ -43,11 +45,11 @@ public sealed class ZipBackupWriter : IZipBackupWriter
                     formatVersion = 1,
                     instanceAgentId = request.InstanceAgentId,
                     instance = new { id = request.InstanceId, name = request.InstanceName, domain = request.Domain },
-                    database = new { provider = "sqlite" },
+                    database = new { provider = request.DatabaseProvider },
                     createdAt = DateTimeOffset.UtcNow
                 }), cancellationToken);
                 await CopyFileAsync(archive, request.InstanceMetadataPath, "instance/instance.json", cancellationToken);
-                await CopyFileAsync(archive, request.DatabaseSnapshotPath, "database/mm_license.db", cancellationToken);
+                await CopyFileAsync(archive, request.DatabaseSnapshotPath, $"database/{request.DatabaseArchiveFileName}", cancellationToken);
                 await CopyFileAsync(archive, request.SigningPublicKeyPath, "keys/signing-public.pem", cancellationToken);
 
                 if (Directory.Exists(request.DataDirectory))
@@ -56,7 +58,7 @@ public sealed class ZipBackupWriter : IZipBackupWriter
                     {
                         if (Path.GetFullPath(file).Equals(Path.GetFullPath(request.DatabaseSnapshotPath), StringComparison.Ordinal)) continue;
                         var relative = Path.GetRelativePath(request.DataDirectory, file).Replace(Path.DirectorySeparatorChar, '/');
-                        if (string.Equals(relative, "mm_license.db", StringComparison.Ordinal)) continue;
+                        if (string.Equals(request.DatabaseProvider, "sqlite", StringComparison.OrdinalIgnoreCase) && string.Equals(relative, "mm_license.db", StringComparison.Ordinal)) continue;
                         await CopyFileAsync(archive, file, $"data/{relative}", cancellationToken);
                     }
                 }

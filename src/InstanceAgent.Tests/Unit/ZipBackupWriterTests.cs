@@ -30,6 +30,20 @@ public sealed class ZipBackupWriterTests : IAsyncLifetime
         Assert.DoesNotContain(archive.Entries, entry => entry.FullName == "data/mm_license.db");
     }
 
+    [Fact]
+    public async Task CreateAsync_WritesMySqlDumpAndProvider()
+    {
+        Directory.CreateDirectory(Path.Combine(_directory, "data"));
+        await File.WriteAllTextAsync(Path.Combine(_directory, "instance.json"), "{}");
+        await File.WriteAllTextAsync(Path.Combine(_directory, "snapshot.sql"), "SELECT 1;");
+        await File.WriteAllTextAsync(Path.Combine(_directory, "signing-public.pem"), "public");
+        var zipPath = Path.Combine(_directory, "mysql-backup.zip");
+        var result = await new ZipBackupWriter().CreateAsync(new CreateZipBackupRequest("agent-1", "instance-1", "customer", "license.example.de", Path.Combine(_directory, "instance.json"), Path.Combine(_directory, "data"), Path.Combine(_directory, "snapshot.sql"), Path.Combine(_directory, "signing-public.pem"), zipPath, "mysql", "mysql.sql"), CancellationToken.None);
+        Assert.True(result.Succeeded);
+        using var archive = ZipFile.OpenRead(zipPath);
+        Assert.Contains(archive.Entries, entry => entry.FullName == "database/mysql.sql");
+    }
+
     public Task InitializeAsync() => Task.CompletedTask;
     public Task DisposeAsync() { if (Directory.Exists(_directory)) Directory.Delete(_directory, true); return Task.CompletedTask; }
 }

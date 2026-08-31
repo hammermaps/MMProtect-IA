@@ -1,4 +1,5 @@
 using MmProtect.InstanceAgent.Infrastructure.Docker;
+using MmProtect.InstanceAgent.Application.Host;
 using MmProtect.InstanceAgent.Infrastructure.Database;
 using MmProtect.InstanceAgent.Infrastructure.Security;
 using MmProtect.InstanceAgent.Models.Requests;
@@ -19,6 +20,7 @@ public sealed class InstanceLifecycleService(
     IDockerService dockerService,
     IMySqlPreflightService mySqlPreflightService,
     IInstanceSecretStore secretStore,
+    IInstanceEventService events,
     ILogger<InstanceLifecycleService> logger) : IInstanceLifecycleService
 {
     public async Task<InstanceLifecycleResult> ExecuteAsync(string instanceId, InstanceLifecycleOperation operation, CancellationToken cancellationToken)
@@ -68,6 +70,7 @@ public sealed class InstanceLifecycleService(
 
         var status = operation == InstanceLifecycleOperation.Stop ? "stopped" : "running";
         await repository.UpdateStatusAsync(instanceId, status, cancellationToken);
+        await events.RecordAsync(instanceId, $"lifecycle.{operation.ToString().ToLowerInvariant()}", $"Instance status changed to {status}.", cancellationToken);
         logger.LogInformation("Instance lifecycle {Operation} completed for {InstanceId}", operation, instanceId);
         return new InstanceLifecycleResult(true, null, status);
     }

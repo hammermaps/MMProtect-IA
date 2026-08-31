@@ -5,6 +5,7 @@ using MmProtect.InstanceAgent.Options;
 namespace MmProtect.InstanceAgent.Infrastructure.Security;
 
 public sealed record InitialInstanceSecrets(string AdminApiKey, string EncoderApiKey, string KeyEncryptionKey, string SigningPublicKeyPem);
+public sealed record RuntimeInstanceSecrets(string AdminApiKey, string EncoderApiKey, string KeyEncryptionKey);
 
 public interface IInstanceSecretStore
 {
@@ -15,6 +16,8 @@ public interface IInstanceSecretStore
     Task StoreMySqlPasswordAsync(string instanceId, string password, CancellationToken cancellationToken);
 
     Task<string?> GetMySqlPasswordAsync(string instanceId, CancellationToken cancellationToken);
+
+    Task<RuntimeInstanceSecrets?> GetRuntimeSecretsAsync(string instanceId, CancellationToken cancellationToken);
 }
 
 public sealed class InstanceSecretStore(IOptions<AgentOptions> options) : IInstanceSecretStore
@@ -72,6 +75,20 @@ public sealed class InstanceSecretStore(IOptions<AgentOptions> options) : IInsta
         EnsureSafeInstanceId(instanceId);
         var path = Path.Combine(GetInstancePath(instanceId), "secrets", "mysql-password");
         return File.Exists(path) ? await File.ReadAllTextAsync(path, cancellationToken) : null;
+    }
+
+    public async Task<RuntimeInstanceSecrets?> GetRuntimeSecretsAsync(string instanceId, CancellationToken cancellationToken)
+    {
+        EnsureSafeInstanceId(instanceId);
+        var secretsPath = Path.Combine(GetInstancePath(instanceId), "secrets");
+        var adminPath = Path.Combine(secretsPath, "admin-api-key");
+        var encoderPath = Path.Combine(secretsPath, "encoder-api-key");
+        var kekPath = Path.Combine(secretsPath, "key-encryption-key");
+        if (!File.Exists(adminPath) || !File.Exists(encoderPath) || !File.Exists(kekPath)) return null;
+        return new RuntimeInstanceSecrets(
+            await File.ReadAllTextAsync(adminPath, cancellationToken),
+            await File.ReadAllTextAsync(encoderPath, cancellationToken),
+            await File.ReadAllTextAsync(kekPath, cancellationToken));
     }
 
     private string GetInstancePath(string instanceId) =>

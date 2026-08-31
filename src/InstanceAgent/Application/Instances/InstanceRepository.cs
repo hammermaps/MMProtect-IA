@@ -42,6 +42,9 @@ public interface IInstanceRepository
 
     Task UpdateStatusAsync(string instanceId, string status, CancellationToken cancellationToken);
 
+    Task UpdateNginxMetadataAsync(string instanceId, int templateVersion, int configRevision, CancellationToken cancellationToken);
+    Task UpdateImageAsync(string instanceId, string containerId, string imageReference, CancellationToken cancellationToken);
+
     Task RemoveAsync(string instanceId, CancellationToken cancellationToken);
 }
 
@@ -116,13 +119,50 @@ public sealed class InstanceRepository(IAgentDatabase database, ILogger<Instance
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
-    public async Task RemoveAsync(string instanceId, CancellationToken cancellationToken)
+    public async Task UpdateNginxMetadataAsync(string instanceId, int templateVersion, int configRevision, CancellationToken cancellationToken)
     {
         await using var connection = await database.OpenConnectionAsync(cancellationToken);
         await using var command = connection.CreateCommand();
+        command.CommandText = "UPDATE instances SET installed_template_version=$version, config_revision=$revision, updated_at=$updatedAt WHERE id=$id;";
+        command.Parameters.AddWithValue("$id", instanceId);
+        command.Parameters.AddWithValue("$version", templateVersion);
+        command.Parameters.AddWithValue("$revision", configRevision);
+        command.Parameters.AddWithValue("$updatedAt", DateTimeOffset.UtcNow.ToString("O"));
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    public async Task UpdateImageAsync(string instanceId, string containerId, string imageReference, CancellationToken cancellationToken)
+    {
+        await using var connection = await database.OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = "UPDATE instances SET container_id=$container, image_reference=$image, updated_at=$updatedAt WHERE id=$id;";
+        command.Parameters.AddWithValue("$id", instanceId); command.Parameters.AddWithValue("$container", containerId); command.Parameters.AddWithValue("$image", imageReference); command.Parameters.AddWithValue("$updatedAt", DateTimeOffset.UtcNow.ToString("O"));
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    public async Task RemoveAsync(string instanceId, CancellationToken cancellationToken)
+    {
+        await using var connection = await database.OpenConnectionAsync(cancellationToken);
+        await using var transaction = connection.BeginTransaction();
+
+        // backups and events reference instances(id) via a plain FOREIGN KEY (no ON DELETE CASCADE),
+        // so their rows must be removed first or the DELETE below fails with a constraint violation.
+        foreach (var table in new[] { "backups", "events" })
+        {
+            await using var deleteChildren = connection.CreateCommand();
+            deleteChildren.Transaction = transaction;
+            deleteChildren.CommandText = $"DELETE FROM {table} WHERE instance_id = $id;";
+            deleteChildren.Parameters.AddWithValue("$id", instanceId);
+            await deleteChildren.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
         command.CommandText = "DELETE FROM instances WHERE id = $id;";
         command.Parameters.AddWithValue("$id", instanceId);
         await command.ExecuteNonQueryAsync(cancellationToken);
+
+        transaction.Commit();
     }
 
     private static void AddParameters(SqliteCommand command, ManagedInstance instance)

@@ -22,7 +22,10 @@ public static class InstanceEndpoints
         group.MapPost("/{id}/stop", (string id, HttpContext context, IInstanceLifecycleService service, CancellationToken cancellationToken) => ExecuteLifecycleAsync(id, InstanceLifecycleOperation.Stop, context, service, cancellationToken));
         group.MapPost("/{id}/restart", (string id, HttpContext context, IInstanceLifecycleService service, CancellationToken cancellationToken) => ExecuteLifecycleAsync(id, InstanceLifecycleOperation.Restart, context, service, cancellationToken));
         group.MapPost("/{id}/reset", ResetAsync);
-        group.MapPost("/{id}/restore", RestoreAsync);
+        // Bearer-token-authenticated machine API: the IFormFile parameter makes ASP.NET Core attach
+        // antiforgery (CSRF) metadata by convention, which has no meaning here and throws without
+        // app.UseAntiforgery() wired up (which this API intentionally doesn't have).
+        group.MapPost("/{id}/restore", RestoreAsync).DisableAntiforgery();
         return endpoints;
     }
 
@@ -47,12 +50,13 @@ public static class InstanceEndpoints
         CreateInstanceRequest request,
         HttpContext context,
         ISqliteInstanceProvisioningService provisioningService,
+        IMySqlInstanceProvisioningService mySqlProvisioningService,
         IIdempotencyService idempotencyService,
         CancellationToken cancellationToken)
     {
-        if (!string.Equals(request.Database?.Provider, "sqlite", StringComparison.OrdinalIgnoreCase))
+        if (request.Database is null || (!string.Equals(request.Database.Provider, "sqlite", StringComparison.OrdinalIgnoreCase) && !string.Equals(request.Database.Provider, "mysql", StringComparison.OrdinalIgnoreCase)))
         {
-            return AgentProblem.Create(context, StatusCodes.Status400BadRequest, "DATABASE_PROVIDER_UNSUPPORTED", "Only the sqlite provider is currently available.");
+            return AgentProblem.Create(context, StatusCodes.Status400BadRequest, "DATABASE_PROVIDER_UNSUPPORTED", "Only sqlite and mysql providers are supported.");
         }
 
         var key = context.Request.Headers["Idempotency-Key"].ToString();
@@ -72,7 +76,9 @@ public static class InstanceEndpoints
             }
         }
 
-        var result = await provisioningService.ProvisionAsync(new CreateSqliteInstanceCommand(request.Name, request.Domain, request.Tls?.Mode), cancellationToken);
+        var result = string.Equals(request.Database.Provider, "mysql", StringComparison.OrdinalIgnoreCase)
+            ? await mySqlProvisioningService.ProvisionAsync(new CreateMySqlInstanceCommand(request.Name, request.Domain, request.Tls?.Mode, request.Database), cancellationToken)
+            : await provisioningService.ProvisionAsync(new CreateSqliteInstanceCommand(request.Name, request.Domain, request.Tls?.Mode), cancellationToken);
         if (!result.Succeeded)
         {
             if (!string.IsNullOrEmpty(key))
@@ -98,7 +104,7 @@ public static class InstanceEndpoints
         });
     }
 
-    private static string RequestHash(CreateInstanceRequest request) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes($"{request.Name}\n{request.Domain}\nsqlite")));
+    private static string RequestHash(CreateInstanceRequest request) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes($"{request.Name}\n{request.Domain}\n{request.Database?.Provider}\n{request.Database?.Server}\n{request.Database?.Port}\n{request.Database?.User}\n{request.Database?.Database}\n{request.Database?.SslMode}")));
 
     private static async Task<IResult> ListAsync(IInstanceRepository repository, CancellationToken cancellationToken)
     {

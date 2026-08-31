@@ -30,23 +30,27 @@ builder.Services
 
 builder.Services.AddSingleton<IAgentDatabase, AgentDatabase>();
 builder.Services.AddSingleton<IInstanceAgentIdentityService, InstanceAgentIdentityService>();
+builder.Services.AddSingleton<IInstanceEventService, InstanceEventService>();
 builder.Services.AddSingleton<IDomainNameValidator, DomainNameValidator>();
 builder.Services.AddSingleton<IInstanceRepository, InstanceRepository>();
 builder.Services.AddSingleton<IIdempotencyService, IdempotencyService>();
 builder.Services.AddSingleton<IInstanceLifecycleService, InstanceLifecycleService>();
 builder.Services.AddSingleton<IInstanceDeletionService, InstanceDeletionService>();
 builder.Services.AddSingleton<IInstanceResetService, InstanceResetService>();
+builder.Services.AddSingleton<IInstanceUpdateService, InstanceUpdateService>();
 builder.Services.AddSingleton<IProcessRunner, ProcessRunner>();
 builder.Services.AddSingleton<INginxService, NginxService>();
 builder.Services.AddSingleton<ITlsCertificateService, TlsCertificateService>();
 builder.Services.AddSingleton<IMySqlPreflightService, MySqlPreflightService>();
 builder.Services.AddSingleton<IMySqlConnectionStringFactory, MySqlConnectionStringFactory>();
 builder.Services.AddSingleton<ISqliteBackupProvider, SqliteBackupProvider>();
+builder.Services.AddSingleton<IMySqlDumpProvider, MySqlDumpProvider>();
 builder.Services.AddSingleton<IZipBackupWriter, ZipBackupWriter>();
 builder.Services.AddSingleton<IInstanceBackupService, InstanceBackupService>();
 builder.Services.AddSingleton<IRestoreArchiveValidator, RestoreArchiveValidator>();
 builder.Services.AddSingleton<IInstanceRestoreService, InstanceRestoreService>();
 builder.Services.AddSingleton<ISqliteInstanceProvisioningService, SqliteInstanceProvisioningService>();
+builder.Services.AddSingleton<IMySqlInstanceProvisioningService, MySqlInstanceProvisioningService>();
 builder.Services.AddSingleton<IInstanceSecretStore, InstanceSecretStore>();
 builder.Services.AddSingleton<ISqliteLicenseServerDatabaseInitializer, SqliteLicenseServerDatabaseInitializer>();
 builder.Services.AddSingleton<ILocalPortProbe, LocalPortProbe>();
@@ -68,6 +72,8 @@ using (var scope = app.Services.CreateScope())
 app.UseMiddleware<ApiKeyAuthenticationMiddleware>();
 app.MapHostEndpoints();
 app.MapInstanceEndpoints();
+app.MapInstanceUpdateEndpoints();
+app.MapInstanceEventEndpoints();
 app.MapPreflightEndpoints();
 app.MapBackupEndpoints();
 app.MapAgentEndpoints();

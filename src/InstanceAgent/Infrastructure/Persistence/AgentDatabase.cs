@@ -120,6 +120,7 @@ public sealed class AgentDatabase : IAgentDatabase
             """;
         await command.ExecuteNonQueryAsync(cancellationToken);
         await EnsureInstanceColumnsAsync(connection, cancellationToken);
+        await EnsureSoftDeleteFriendlyUniqueIndexesAsync(connection, cancellationToken);
         SetUnixModeIfSupported(_databasePath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
         _logger.LogInformation("Initialized local agent metadata store");
     }
@@ -163,6 +164,90 @@ public sealed class AgentDatabase : IAgentDatabase
         }
 
         File.SetUnixFileMode(path, mode);
+    }
+
+    /// <summary>
+    /// One-time migration: the original schema declared <c>domain</c> and <c>host_port</c> as
+    /// column-level UNIQUE, which permanently reserves both for a soft-deleted (deleteData=false)
+    /// instance row and contradicts the documented "port freigeben" behavior on delete. Rebuilds the
+    /// table without those inline constraints and replaces them with partial unique indexes that only
+    /// apply to non-deleted rows, so a domain/port becomes reusable once its instance is soft-deleted.
+    /// Idempotent: skipped once the target indexes already exist.
+    /// </summary>
+    private static async Task EnsureSoftDeleteFriendlyUniqueIndexesAsync(SqliteConnection connection, CancellationToken cancellationToken)
+    {
+        await using (var check = connection.CreateCommand())
+        {
+            check.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'idx_instances_domain_active';";
+            var alreadyMigrated = Convert.ToInt64(await check.ExecuteScalarAsync(cancellationToken)) > 0;
+            if (alreadyMigrated)
+            {
+                return;
+            }
+        }
+
+        await using (var disableFk = connection.CreateCommand())
+        {
+            disableFk.CommandText = "PRAGMA foreign_keys = OFF;";
+            await disableFk.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        await using (var rebuild = connection.CreateCommand())
+        {
+            rebuild.CommandText = """
+                BEGIN TRANSACTION;
+
+                CREATE TABLE instances_new (
+                    id TEXT PRIMARY KEY NOT NULL,
+                    name TEXT NOT NULL,
+                    domain TEXT NOT NULL,
+                    container_id TEXT NULL,
+                    container_name TEXT NULL,
+                    host_port INTEGER NOT NULL,
+                    database_provider TEXT NOT NULL,
+                    database_server TEXT NULL,
+                    database_port INTEGER NULL,
+                    database_user TEXT NULL,
+                    database_name TEXT NULL,
+                    database_ssl_mode TEXT NULL,
+                    status TEXT NOT NULL,
+                    data_path TEXT NOT NULL,
+                    image_reference TEXT NULL,
+                    image_digest TEXT NULL,
+                    installed_template_version INTEGER NOT NULL DEFAULT 0,
+                    config_revision INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+
+                INSERT INTO instances_new
+                    (id, name, domain, container_id, container_name, host_port, database_provider,
+                     database_server, database_port, database_user, database_name, database_ssl_mode,
+                     status, data_path, image_reference, image_digest, installed_template_version,
+                     config_revision, created_at, updated_at)
+                SELECT
+                    id, name, domain, container_id, container_name, host_port, database_provider,
+                    database_server, database_port, database_user, database_name, database_ssl_mode,
+                    status, data_path, image_reference, image_digest, installed_template_version,
+                    config_revision, created_at, updated_at
+                FROM instances;
+
+                DROP TABLE instances;
+                ALTER TABLE instances_new RENAME TO instances;
+
+                CREATE UNIQUE INDEX idx_instances_domain_active ON instances(domain) WHERE status != 'deleted';
+                CREATE UNIQUE INDEX idx_instances_host_port_active ON instances(host_port) WHERE status != 'deleted';
+
+                COMMIT;
+                """;
+            await rebuild.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        await using (var enableFk = connection.CreateCommand())
+        {
+            enableFk.CommandText = "PRAGMA foreign_keys = ON;";
+            await enableFk.ExecuteNonQueryAsync(cancellationToken);
+        }
     }
 
     private static async Task EnsureInstanceColumnsAsync(SqliteConnection connection, CancellationToken cancellationToken)
